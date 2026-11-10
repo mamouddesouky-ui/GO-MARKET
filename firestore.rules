@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // غيّر الإيميل ده لإيميل المالك اللي عملته في Authentication
+    function isOwner() {
+      return request.auth != null && request.auth.token.email == 'go2025fast@gmail.com';
+    }
+    function isDriver() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/drivers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/drivers/$(request.auth.uid)).data.on == true;
+    }
+    match /config/{x} { allow read: if true; allow write: if isOwner(); }
+    match /items/{x}  { allow read: if true; allow write: if isOwner(); }
+    match /drivers/{uid} {
+      allow read: if isOwner() || (request.auth != null && request.auth.uid == uid);
+      allow write: if isOwner();
+      // المندوب يحدّث حالة اتصاله هو بس (online / seen) ومش بيقدر يغيّر أي حاجة تانية
+      allow update: if request.auth != null && request.auth.uid == uid
+        && resource.data.on == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['online','seen']);
+    }
+    match /ftokens/{uid} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+    match /orders/{id} {
+      allow create: if request.resource.data.status == 'new'
+        && request.resource.data.total is number
+        && request.resource.data.l is list && request.resource.data.l.size() <= 40
+        && request.resource.data.n is string && request.resource.data.n.size() < 100
+        && request.resource.data.p is string && request.resource.data.p.size() < 20
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.sub is number && request.resource.data.disc is number && request.resource.data.fee is number
+        && request.resource.data.sub >= 0 && request.resource.data.disc >= 0
+        && request.resource.data.fee >= 0 && request.resource.data.fee <= 1000
+        && request.resource.data.total >= 0
+        && request.resource.data.disc <= request.resource.data.sub + 1
+        && math.abs(request.resource.data.total
+             - (request.resource.data.sub - request.resource.data.disc + request.resource.data.fee)) < 0.02
+        && request.resource.data.keys().hasOnly(['no','status','type','n','p','a','loc','y','c','l','sub','disc','fee','total','promo','ftok','createdAt']);
+      // get بالـ ID بس (list ممنوع) — والـ ID عشوائي UUID من العميل فمفيش تخمين
+      allow get: if true;
+      allow list: if isOwner()
+        || (isDriver() && resource.data.keys().hasAny(['drv']) && resource.data.drv.id == request.auth.uid);
+      allow update: if isOwner()
+        || (isDriver() && resource.data.keys().hasAny(['drv']) && resource.data.drv.id == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+            && request.resource.data.status in ['delivering', 'done']);
+      // اتشال فرع تعديل ftok المفتوح للكل (الإشعارات متعطلة FB_VAPID فاضي). لو فعّلتها لاحقاً: اربطه بـ auth.
+      allow delete: if isOwner();
+    }
+  }
+}
